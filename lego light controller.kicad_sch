@@ -2147,8 +2147,8 @@
     (property "Datasheet" "~" (at 92.71 157.48 0)
       (effects (font (size 1.27 1.27)) hide)
     )
-    (pin "1" (uuid ceffd85c-72a6-4230-b7c1-3ed0a5de112a))
-    (pin "2" (uuid 55ba2c9e-47f8-4143-a174-c3d0731fbf8c))
+    (pin "1" (uuid ceffd85c-72a6-4230-b7c1-3ed0a5de112b))
+    (pin "2" (uuid 55ba2c9e-47f8-4143-a174-c3d0731fbf8d))
     (instances
       (project "lego light controller"
         (path "/98f222a8-3f8d-4678-9dc7-d0db8bfd24c1"
