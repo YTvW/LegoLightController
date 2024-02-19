@@ -28,3 +28,4 @@ fp-info-cache
 *.xml
 *.csv
 lego light controller.kicad_pcb.zip
+~lego light controller.kicad_sch.lck
