@@ -2496,7 +2496,7 @@
     (stroke (width 0.05) (type default)) (layer "F.CrtYd") (tstamp 095f5447-9c26-4fd7-8f0a-39cb5af0a6c2))
   (gr_line (start 211.8 95.8) (end 211.81 80)
     (stroke (width 0.05) (type default)) (layer "F.CrtYd") (tstamp 489fab2b-b4c1-4303-81d8-58b000be4df0))
-  (image (at 151 86.5) (layer "B.SilkS") (scale 0.104023)
+  (image (at 183.25 85.75) (layer "B.SilkS") (scale 0.0808296)
     (data
       iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAABHNCSVQICAgIfAhkiAAAIABJREFU
       eJzs3XmcXFWZN/Dfc271mnQ6ZO2urZNOIIBB1MgmIEHCqoIbKKDjrgOoo46OvuPMOOoszPjqqK8z
@@ -3183,7 +3183,7 @@
       8IQnPOEJT3jCM4pX/QrAjgpbBC/0SUPhCU94whOe8IRnFI//f0XVBqpwiT6ZAAAAAElFTkSuQmCC
     )
   )
-  (image (at 183.25 85.75) (layer "B.SilkS") (scale 0.0808296)
+  (image (at 151 86.5) (layer "B.SilkS") (scale 0.104023)
     (data
       iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAABHNCSVQICAgIfAhkiAAAIABJREFU
       eJzs3XmcXFWZN/Dfc271mnQ6ZO2urZNOIIBB1MgmIEHCqoIbKKDjrgOoo46OvuPMOOoszPjqqK8z
