@@ -7,6 +7,9 @@
 		(legacy_teardrops no)
 	)
 	(paper "A4")
+	(title_block
+		(comment 4 "AISLER Project ID: AIXNFFQP")
+	)
 	(layers
 		(0 "F.Cu" signal)
 		(31 "B.Cu" signal)
@@ -361,7 +364,7 @@
 		(descr "SMT capacitor, aluminium electrolytic, 3x5.3, Cornell Dubilier Electronics ")
 		(tags "Capacitor Electrolytic")
 		(property "Reference" "C1"
-			(at -0.96 -0.2 90)
+			(at -0.96 -1.17 90)
 			(layer "B.SilkS")
 			(uuid "2d2a3087-b364-4113-b082-91fe52d7fd80")
 			(effects
@@ -9974,7 +9977,7 @@
 		)
 		(uuid "b331a1c6-17b5-4679-9193-d2e297f8ffd9")
 	)
-	(gr_text "YTvW 2024 \nLED controller\nRev1.0"
+	(gr_text "YTvW 2024 \nQBee LED controller\nRev1.0"
 		(at 190.38 80.06 90)
 		(layer "B.SilkS")
 		(uuid "8636b0b8-a43b-4ea6-9400-6dd3a097313d")
