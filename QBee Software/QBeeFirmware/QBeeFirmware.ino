@@ -1,29 +1,18 @@
-#include <Adafruit_NeoPixel.h>
+// #include <Adafruit_NeoPixel.h>
+// #include "pwm_driver.h"
+// #include "neopixel_driver.h"
+#include "ws2812b_dma_driver.h"
 
+ws2812b_strip_t strip;
 
 #define PIXEL_PIN_1 15
 #define PIXEL_PIN_2 14
 
-#define PWM_PIN_1 2
 #define PWM_PIN_2 4
 #define PWM_PIN_3 5
 
-
-
-// Parameter 1 = number of pixels in strip
-// Parameter 2 = Arduino pin number (most are valid)
-// Parameter 3 = pixel type flags, add together as needed:
-//   NEO_KHZ800  800 KHz bitstream (most NeoPixel products w/WS2812 LEDs)
-//   NEO_KHZ400  400 KHz (classic 'v1' (not v2) FLORA pixels, WS2811 drivers)
-//   NEO_GRB     Pixels are wired for GRB bitstream (most NeoPixel products)
-//   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
-//   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
-Adafruit_NeoPixel strip1 = Adafruit_NeoPixel(8, PIXEL_PIN_1, NEO_GRB + NEO_KHZ800);
-
-Adafruit_NeoPixel strip2 = Adafruit_NeoPixel(8, PIXEL_PIN_2, NEO_GRB + NEO_KHZ800);
-
 // constants won't change. Used here to set a pin number:
-const int ledPin1 = PWM_PIN_1;
+const int ledPin1 = 2;
 const int ledPin2 = PWM_PIN_2;
 const int ledPin3 = PWM_PIN_3;
 
@@ -31,26 +20,41 @@ int ledState = 0;  // ledState used to set the LED
 
 unsigned long previousMillis = 0;  // will store last time LED was updated
 
-const long interval = 1000;  // interval at which to blink (milliseconds)
+const long interval = 50;  // interval at which to blink (milliseconds)
+
+// neopixel_strip_t strip;
+// neopixel_strip_t strip2;
+
+// Adafruit_NeoPixel strip1 = Adafruit_NeoPixel(8, PIXEL_PIN_1, NEO_GRB + NEO_KHZ800);
 
 void setup() {
-  Serial.begin(9600);
-  while (!Serial) {
-    ;  // wait for serial port to connect. Needed for native USB port only
-  }    // prints title with ending line break
+  Serial.begin(115200);
+  // while (!Serial) {
+  //   ;  // wait for serial port to connect. Needed for native USB port only
+  // }    // prints title with ending line break
   Serial.println("running set up");
   pinMode(ledPin1, OUTPUT);
   pinMode(ledPin2, OUTPUT);
   pinMode(ledPin3, OUTPUT);
-  analogWrite(ledPin1, 127);
-  strip1.begin();
-  strip1.setBrightness(50);
-  strip1.show();  // Initialize all pixels to 'off'
-  strip2.begin();
-  strip2.setBrightness(50);
-  strip2.show();  // Initialize all pixels to 'off'
-}
 
+  ws2812b_init(&strip, PIXEL_PIN_1, 8, WS2812B_GRB, NULL);
+  ws2812b_set_brightness(&strip, 64);
+  // ws2812b_set_pixel_color(&strip, 0, ws2812b_color(255, 0, 0));
+  // ws2812b_set_pixel_color(&strip, 1, ws2812b_color(255, 127, 0));
+  // ws2812b_set_pixel_color(&strip, 2, ws2812b_color(127, 255, 0));
+  // ws2812b_set_pixel_color(&strip, 3, ws2812b_color(0, 255, 0));
+  // ws2812b_set_pixel_color(&strip, 4, ws2812b_color(0, 255, 127));
+  // ws2812b_set_pixel_color(&strip, 5, ws2812b_color(0, 127, 255));
+  // ws2812b_set_pixel_color(&strip, 6, ws2812b_color(0, 0, 255));
+  // ws2812b_set_pixel_color(&strip, 7, ws2812b_color(127, 0, 255));
+  // ws2812b_set_pixel_color(&strip, 0, ws2812b_color(255, 0, 127));
+  ws2812b_fill(&strip, 0, 0, 0);
+  ws2812b_show(&strip);  // Fire and forget - returns immediately
+
+  // analogWrite(ledPin2, 200);
+  // analogWrite(ledPin3, 100);
+}
+uint8_t ledNr = 0;
 void loop() {
 
   // check to see if it's time to blink the LED; that is, if the difference
@@ -60,47 +64,72 @@ void loop() {
 
   if (currentMillis - previousMillis >= interval) {
     // save the last time you blinked the LED
+
     previousMillis = currentMillis;
-    Serial.println("TOGGLE OUTPUT");
+    Serial.print("ledNr: ");
+    Serial.println(ledNr);
     // if the LED is off turn it on and vice-versa:
-    if (ledState == 0) {
-      ledState = 50;
+    if (ledState == 64) {
+      ledState = 200;
+      ws2812b_set_pixel_color(&strip, ledNr, ws2812b_color(255, 255, 255));
+
     } else {
-      ledState = 0;
+      ws2812b_set_pixel_color(&strip, ledNr, ws2812b_color(0, 0, 255));
+
+
+      ledState = 64;
     }
 
-    // set the LED with the ledState of the variable:
-    analogWrite(ledPin3, ledState);
-    analogWrite(ledPin1,10);
+    // CPU is free while LEDs update
+    if (ws2812b_is_ready(&strip)) {
+      // Start next update
+      Serial.println("updating leds: ");
+
+      ws2812b_show(&strip);
+    } else {
+      Serial.println("leds not ready");
+    }
+    ledNr += 1;
+    if (ledNr >= 8) {
+      ledNr = 0;
+      ws2812b_fill(&strip, 0,0,0);
+    }
+    // neopixel_show(&strip);
+    // strip1.show();
+    // pwm_set_duty(PWM_CHANNEL_2, ledState);  // 50%
+    // pwm_set_duty(PWM_CHANNEL_3, 64);   // 25%
+    //   // set the LED with the ledState of the variable:
+    // analogWrite(ledPin2, ledState);
+    // analogWrite(ledPin3, 255 - ledState);
   }
 
   //  rainbowCycle(strip2,20);
 }
 
 // Slightly different, this makes the rainbow equally distributed throughout
-void rainbowCycle(Adafruit_NeoPixel strip, uint8_t wait) {
-  uint16_t i, j;
+// void rainbowCycle(Adafruit_NeoPixel strip, uint8_t wait) {
+//   uint16_t i, j;
 
-  for (j = 0; j < 256 * 5; j++) {  // 5 cycles of all colors on wheel
-    for (i = 0; i < strip.numPixels(); i++) {
-      strip.setPixelColor(i, Wheel(strip, ((i * 256 / strip.numPixels()) + j) & 255));
-    }
-    strip.show();
-    delay(wait);
-  }
-}
+//   for (j = 0; j < 256 * 5; j++) {  // 5 cycles of all colors on wheel
+//     for (i = 0; i < strip.numPixels(); i++) {
+//       strip.setPixelColor(i, Wheel(strip, ((i * 256 / strip.numPixels()) + j) & 255));
+//     }
+//     strip.show();
+//     delay(wait);
+//   }
+// }
 
 // Input a value 0 to 255 to get a color value.
 // The colours are a transition r - g - b - back to r.
-uint32_t Wheel(Adafruit_NeoPixel strip, byte WheelPos) {
-  WheelPos = 255 - WheelPos;
-  if (WheelPos < 85) {
-    return strip.Color(255 - WheelPos * 3, 0, WheelPos * 3);
-  }
-  if (WheelPos < 170) {
-    WheelPos -= 85;
-    return strip.Color(0, WheelPos * 3, 255 - WheelPos * 3);
-  }
-  WheelPos -= 170;
-  return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
-}
+// uint32_t Wheel(Adafruit_NeoPixel strip, byte WheelPos) {
+//   WheelPos = 255 - WheelPos;
+//   if (WheelPos < 85) {
+//     return strip.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+//   }
+//   if (WheelPos < 170) {
+//     WheelPos -= 85;
+//     return strip.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+//   }
+//   WheelPos -= 170;
+//   return strip.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+// }
