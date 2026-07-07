@@ -30,3 +30,10 @@ fp-info-cache
 lego light controller.kicad_pcb.zip
 ~lego light controller.kicad_sch.lck
 ~lego light controller.kicad_pcb.lck
+
+#compiled object files
+*.bin
+*.hex
+*.elf
+*.ino.map
+
