@@ -8,6 +8,13 @@
  * latches CCB into CC at each period boundary (UPDATE), so the compare
  * value for a bit can never race the counter mid-period.
  *
+ * Supports up to WS2812B_MAX_STRIPS independent, concurrent strips. Each
+ * strip owns its own DMA channel, DMA descriptor, DMA buffer and TCC0
+ * WO[x]/CC[x] compare channel - only TCC0's shared timebase (prescaler,
+ * period, enable) and the DMAC's global setup are configured once, on the
+ * first strip's init. Two strips can encode and transfer concurrently
+ * without touching each other's state.
+ *
  * NOTE: TC1's CC registers are NOT double-buffered on the SAMD11, which
  * makes TC1 unusable for this: each DMA write lands ~10-20 clocks into
  * the period it is consumed in, racing the 14-tick '0'-bit compare point,
@@ -21,42 +28,44 @@
 // DMA Configuration
 // ============================================================================
 
-// DMA channel for WS2812B (using channel 0)
-#define WS2812B_DMA_CHANNEL 0
-
 // DMA buffer size: 8 bits per color byte, plus extra for reset
 #define WS2812B_DMA_BUFFER_SIZE ((WS2812B_MAX_PIXELS * 4 * 8) + 64)
 
-// DMA descriptor (must be 16-byte aligned)
-__attribute__((aligned(16))) static DmacDescriptor _dmaDescriptor;
+// DMA descriptors (must be 16-byte aligned). The DMAC indexes this array
+// by channel number; each strip's DMA channel number equals its slot.
+__attribute__((aligned(16))) static DmacDescriptor _dmaDescriptors[WS2812B_MAX_STRIPS];
 
-// Writeback descriptor (required by DMAC)
-__attribute__((aligned(16))) static DmacDescriptor _dmaWriteback;
+// Writeback descriptors (required by DMAC), same indexing as above
+__attribute__((aligned(16))) static DmacDescriptor _dmaWritebacks[WS2812B_MAX_STRIPS];
 
-// DMA buffer for compare values
-static uint8_t _dmaBuffer[WS2812B_DMA_BUFFER_SIZE];
+// DMA buffer for compare values, one per strip slot
+static uint8_t _dmaBuffers[WS2812B_MAX_STRIPS][WS2812B_DMA_BUFFER_SIZE];
 
-// Internal pixel buffer
-static uint8_t _pixelBuffer[WS2812B_MAX_PIXELS * 4];
+// Internal pixel buffers, one per strip slot (used when ws2812b_init() is
+// called with buffer = NULL)
+static uint8_t _pixelBuffers[WS2812B_MAX_STRIPS][WS2812B_MAX_PIXELS * 4];
 
-// Track which strip owns the DMA
-static ws2812b_strip_t *_activeStrip = NULL;
+// Which strip owns each DMA channel (only used by the optional ISR)
+static ws2812b_strip_t *_activeStrips[WS2812B_MAX_STRIPS] = {NULL};
 
-// TCC0 output configuration
+// Number of strips configured so far; also the next free slot/DMA channel
+static uint8_t _numStripsConfigured = 0;
+
+// TCC0 shared timebase - configured once, by the first ws2812b_init() call
 static volatile bool _tccConfigured = false;
-static uint8_t _configuredPin = 0xFF;
-static uint8_t _woChannel = 0; // TCC0 WO[x]/CC[x] channel in use
 
-// Transfer supervision
-static uint32_t _busyStartMs = 0;      // millis() when current transfer started
-static uint16_t _recoveryCount = 0;    // abnormal transfer ends since boot
+// DMAC global setup (BASEADDR/WRBADDR/DMAENABLE) - done once
+static volatile bool _dmacInitialized = false;
+
+// Recovery counter, aggregated across all strips
+static uint16_t _recoveryCount = 0;
 
 // ============================================================================
 // Forward Declarations
 // ============================================================================
 
-static bool _configureTCC0(uint8_t pin);
-static void _configureDMA(void);
+static bool _configureTCC0(uint8_t pin, uint8_t *woChannelOut);
+static void _configureDMAChannel(uint8_t channel);
 static uint16_t _encodePixels(ws2812b_strip_t *strip);
 
 // ============================================================================
@@ -87,9 +96,20 @@ static const tcc0_pin_map_t _tcc0Pins[] = {
 // ============================================================================
 
 /**
- * @brief Configure TCC0 for 800kHz PWM output
+ * @brief Configure TCC0's shared timebase once, then bind one pin to its
+ *        own WO[x]/CC[x] compare channel.
+ *
+ * Safe to call once per strip: the counter mode/period/prescaler are
+ * enable-protected, so they are only touched before TCC0's first enable.
+ * Binding a second pin afterwards only zeroes that pin's own CC/CCB and
+ * sets its PMUX - it never resets TCC0 or disturbs another strip's
+ * already-running compare channel.
+ *
+ * @param arduinoPin Arduino pin number to bind
+ * @param woChannelOut Set to the resolved WO[x]/CC[x] index on success
+ * @return true on success, false if the pin has no TCC0 output
  */
-static bool _configureTCC0(uint8_t arduinoPin)
+static bool _configureTCC0(uint8_t arduinoPin, uint8_t *woChannelOut)
 {
   // Find the pin in our mapping
   const tcc0_pin_map_t *pinMap = NULL;
@@ -119,38 +139,51 @@ static bool _configureTCC0(uint8_t arduinoPin)
     return false; // Pin not capable of TCC0 output
   }
 
-  // Enable TCC0 clock (GCLK0 = 48MHz)
-  PM->APBCMASK.reg |= PM_APBCMASK_TCC0;
+  if (!_tccConfigured)
+  {
+    // Enable TCC0 clock (GCLK0 = 48MHz)
+    PM->APBCMASK.reg |= PM_APBCMASK_TCC0;
 
-  // Connect GCLK0 to TCC0
-  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(TCC0_GCLK_ID) |
-                      GCLK_CLKCTRL_CLKEN |
-                      GCLK_CLKCTRL_GEN_GCLK0;
-  while (GCLK->STATUS.bit.SYNCBUSY)
-    ;
+    // Connect GCLK0 to TCC0
+    GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(TCC0_GCLK_ID) |
+                        GCLK_CLKCTRL_CLKEN |
+                        GCLK_CLKCTRL_GEN_GCLK0;
+    while (GCLK->STATUS.bit.SYNCBUSY)
+      ;
 
-  // Reset TCC0
-  TCC0->CTRLA.reg = TCC_CTRLA_SWRST;
-  while (TCC0->SYNCBUSY.bit.SWRST || TCC0->CTRLA.bit.SWRST)
-    ;
+    // Reset TCC0
+    TCC0->CTRLA.reg = TCC_CTRLA_SWRST;
+    while (TCC0->SYNCBUSY.bit.SWRST || TCC0->CTRLA.bit.SWRST)
+      ;
 
-  // Prescaler DIV1 (48MHz clock)
-  TCC0->CTRLA.reg = TCC_CTRLA_PRESCALER_DIV1;
+    // Prescaler DIV1 (48MHz clock)
+    TCC0->CTRLA.reg = TCC_CTRLA_PRESCALER_DIV1;
 
-  // Normal PWM: output high from 0 until CC[x] match, then low
-  TCC0->WAVE.reg = TCC_WAVE_WAVEGEN_NPWM;
-  while (TCC0->SYNCBUSY.reg)
-    ;
+    // Normal PWM: output high from 0 until CC[x] match, then low
+    TCC0->WAVE.reg = TCC_WAVE_WAVEGEN_NPWM;
+    while (TCC0->SYNCBUSY.reg)
+      ;
 
-  // Set period for 800kHz (60 ticks @ 48MHz = 1.25µs)
-  TCC0->PER.reg = WS2812B_PERIOD_TICKS - 1;
-  while (TCC0->SYNCBUSY.reg)
-    ;
+    // Set period for 800kHz (60 ticks @ 48MHz = 1.25µs)
+    TCC0->PER.reg = WS2812B_PERIOD_TICKS - 1;
+    while (TCC0->SYNCBUSY.reg)
+      ;
 
-  // Initialize compare value and its buffer to 0 (output low).
-  // DMA only ever writes the low byte of CCB[x]; the upper bytes
-  // stay zero from this init.
+    // Enable TCC0
+    TCC0->CTRLA.reg |= TCC_CTRLA_ENABLE;
+    while (TCC0->SYNCBUSY.bit.ENABLE)
+      ;
+
+    _tccConfigured = true;
+  }
+
+  // Initialize this channel's compare value and its buffer to 0 (output
+  // low). Safe to do on an already-running TCC0 - same mechanism
+  // pwm_driver uses for live duty updates. DMA only ever writes the low
+  // byte of CCB[x]; the upper bytes stay zero from this init.
   TCC0->CC[pinMap->woChannel].reg = 0;
+  while (TCC0->SYNCBUSY.reg)
+    ;
   TCC0->CCB[pinMap->woChannel].reg = 0;
   while (TCC0->SYNCBUSY.reg)
     ;
@@ -168,15 +201,7 @@ static bool _configureTCC0(uint8_t arduinoPin)
     PORT->Group[0].PMUX[portPin >> 1].bit.PMUXE = pinMap->pmuxVal;
   }
 
-  // Enable TCC0
-  TCC0->CTRLA.reg |= TCC_CTRLA_ENABLE;
-  while (TCC0->SYNCBUSY.bit.ENABLE)
-    ;
-
-  _tccConfigured = true;
-  _configuredPin = arduinoPin;
-  _woChannel = pinMap->woChannel;
-
+  *woChannelOut = pinMap->woChannel;
   return true;
 }
 
@@ -185,30 +210,40 @@ static bool _configureTCC0(uint8_t arduinoPin)
 // ============================================================================
 
 /**
- * @brief Configure DMA controller
+ * @brief Configure one DMA channel to feed TCC0 overflow requests.
+ *
+ * The DMAC-wide setup (clocks, descriptor table base addresses, global
+ * enable) runs once, on the first strip's init; every strip after that
+ * only configures its own channel, leaving other channels' in-flight
+ * transfers untouched.
+ *
+ * @param channel DMA channel to configure (== the strip's slot index)
  */
-static void _configureDMA(void)
+static void _configureDMAChannel(uint8_t channel)
 {
-  // Enable DMAC clock
-  PM->AHBMASK.reg |= PM_AHBMASK_DMAC;
-  PM->APBBMASK.reg |= PM_APBBMASK_DMAC;
+  if (!_dmacInitialized)
+  {
+    // Enable DMAC clock
+    PM->AHBMASK.reg |= PM_AHBMASK_DMAC;
+    PM->APBBMASK.reg |= PM_APBBMASK_DMAC;
 
-  // Reset DMAC
-  DMAC->CTRL.reg = DMAC_CTRL_SWRST;
-  while (DMAC->CTRL.bit.SWRST)
-    ;
+    // Reset DMAC
+    DMAC->CTRL.reg = DMAC_CTRL_SWRST;
+    while (DMAC->CTRL.bit.SWRST)
+      ;
 
-  // Set descriptor base addresses
-  DMAC->BASEADDR.reg = (uint32_t)&_dmaDescriptor;
-  DMAC->WRBADDR.reg = (uint32_t)&_dmaWriteback;
+    // Set descriptor base addresses (indexed by channel number)
+    DMAC->BASEADDR.reg = (uint32_t)_dmaDescriptors;
+    DMAC->WRBADDR.reg = (uint32_t)_dmaWritebacks;
 
-  // Enable all priority levels
-  DMAC->CTRL.reg = DMAC_CTRL_DMAENABLE | DMAC_CTRL_LVLEN(0xF);
+    // Enable all priority levels
+    DMAC->CTRL.reg = DMAC_CTRL_DMAENABLE | DMAC_CTRL_LVLEN(0xF);
 
-  // Configure channel 0 for TC1 overflow trigger
-  DMAC->CHID.reg = WS2812B_DMA_CHANNEL;
+    _dmacInitialized = true;
+  }
 
-  // Reset channel
+  // Select and reset this channel only
+  DMAC->CHID.reg = channel;
   DMAC->CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
   while (DMAC->CHCTRLA.bit.SWRST)
     ;
@@ -222,19 +257,20 @@ static void _configureDMA(void)
 }
 
 /**
- * @brief Encode pixel data into DMA buffer with compare values
+ * @brief Encode pixel data into this strip's own DMA buffer
  *
  * Converts each bit of pixel data to a compare value:
  *   - '0' bit -> 14 (short pulse)
  *   - '1' bit -> 38 (long pulse)
  *
  * @param strip Pointer to strip structure
- * @return Number of bytes in DMA buffer
+ * @return Number of bytes written to the strip's DMA buffer
  */
 static uint16_t _encodePixels(ws2812b_strip_t *strip)
 {
   uint8_t *src = strip->pixels;
-  uint8_t *dst = _dmaBuffer;
+  uint8_t *dstStart = _dmaBuffers[strip->_slot];
+  uint8_t *dst = dstStart;
   uint16_t totalBytes = strip->numPixels * strip->bytesPerPixel;
   uint8_t brightness = strip->brightness;
 
@@ -269,60 +305,65 @@ static uint16_t _encodePixels(ws2812b_strip_t *strip)
     *dst++ = 0;
   }
 
-  return (dst - _dmaBuffer);
+  return (dst - dstStart);
 }
 
 /**
- * @brief Start DMA transfer
+ * @brief Start this strip's DMA transfer on its own channel
  *
  * @param strip Pointer to strip structure
  * @param length Number of bytes to transfer
  */
 static void _startDMATransfer(ws2812b_strip_t *strip, uint16_t length)
 {
-  // Configure DMA descriptor. Beats are single bytes written to the low
-  // byte of the 24-bit CCB[x] buffer register; the upper bytes stay 0.
-  // CCB is latched into CC by hardware at each period boundary, so each
-  // bit's compare value takes effect exactly one full period after the
-  // overflow that fetched it - no race against the running counter.
-  _dmaDescriptor.BTCTRL.reg = DMAC_BTCTRL_VALID |
-                              DMAC_BTCTRL_BEATSIZE_BYTE |
-                              DMAC_BTCTRL_SRCINC | // Increment source
-                              DMAC_BTCTRL_BLOCKACT_NOACT;
+  uint8_t slot = strip->_slot;
+  DmacDescriptor *desc = &_dmaDescriptors[slot];
+  uint8_t *buf = _dmaBuffers[slot];
 
-  _dmaDescriptor.BTCNT.reg = length;
-  _dmaDescriptor.SRCADDR.reg = (uint32_t)(_dmaBuffer + length);        // End of source
-  _dmaDescriptor.DSTADDR.reg = (uint32_t)&TCC0->CCB[_woChannel].reg;   // TCC0 compare buffer
-  _dmaDescriptor.DESCADDR.reg = 0;                                     // No linked descriptor
+  // Configure this strip's own DMA descriptor. Beats are single bytes
+  // written to the low byte of the 24-bit CCB[x] buffer register; the
+  // upper bytes stay 0. CCB is latched into CC by hardware at each period
+  // boundary, so each bit's compare value takes effect exactly one full
+  // period after the overflow that fetched it - no race against the
+  // running counter, and no interference with any other strip's channel.
+  desc->BTCTRL.reg = DMAC_BTCTRL_VALID |
+                     DMAC_BTCTRL_BEATSIZE_BYTE |
+                     DMAC_BTCTRL_SRCINC | // Increment source
+                     DMAC_BTCTRL_BLOCKACT_NOACT;
+
+  desc->BTCNT.reg = length;
+  desc->SRCADDR.reg = (uint32_t)(buf + length);                     // End of source
+  desc->DSTADDR.reg = (uint32_t)&TCC0->CCB[strip->_woChannel].reg;  // This strip's CCB
+  desc->DESCADDR.reg = 0;                                           // No linked descriptor
 
   // Clear the stale overflow request left over from TCC0 free-running
   // since the last transfer. Without this the DMAC sees an already
   // asserted trigger the moment the channel is enabled.
   TCC0->INTFLAG.reg = TCC_INTFLAG_OVF;
 
-  // Select channel, clear leftover channel flags, enable
-  DMAC->CHID.reg = WS2812B_DMA_CHANNEL;
+  // Select this strip's channel, clear its leftover flags, enable it
+  DMAC->CHID.reg = slot;
   DMAC->CHINTFLAG.reg = DMAC_CHINTFLAG_TCMPL | DMAC_CHINTFLAG_TERR | DMAC_CHINTFLAG_SUSP;
   DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
 
-  _busyStartMs = millis();
-  _activeStrip = strip;
+  strip->_busyStartMs = millis();
+  _activeStrips[slot] = strip;
 }
 
 /**
- * @brief Check whether the running transfer has finished, and recover
- *        from any abnormal end so the driver can never wedge in BUSY.
+ * @brief Check whether this strip's transfer has finished, and recover
+ *        from any abnormal end so it can never wedge in BUSY.
  *
  * Completion is normally signalled by TCMPL. Additionally treated as
  * "done": a transfer error (TERR), the channel no longer being enabled
  * without a completion flag, and a hard timeout many times the worst
  * case transfer duration (a 16-pixel RGBW frame takes ~0.7ms).
  *
- * @return true if the channel is free and the strip was marked idle
+ * @return true if this strip's channel is free and it was marked idle
  */
 static bool _checkTransferComplete(ws2812b_strip_t *strip)
 {
-  DMAC->CHID.reg = WS2812B_DMA_CHANNEL;
+  DMAC->CHID.reg = strip->_slot;
   uint8_t flags = DMAC->CHINTFLAG.reg;
 
   bool done = (flags & (DMAC_CHINTFLAG_TCMPL | DMAC_CHINTFLAG_TERR)) != 0;
@@ -331,7 +372,7 @@ static bool _checkTransferComplete(ws2812b_strip_t *strip)
   {
     // Channel silently disabled, or transfer running far too long
     if (!DMAC->CHCTRLA.bit.ENABLE ||
-        (uint32_t)(millis() - _busyStartMs) > WS2812B_XFER_TIMEOUT_MS)
+        (uint32_t)(millis() - strip->_busyStartMs) > WS2812B_XFER_TIMEOUT_MS)
     {
       done = true;
       _recoveryCount++;
@@ -364,22 +405,36 @@ bool ws2812b_init(ws2812b_strip_t *strip, uint8_t pin, uint16_t numPixels,
     return false;
   }
 
+  if (_numStripsConfigured >= WS2812B_MAX_STRIPS)
+  {
+    return false; // Out of DMA channels/buffers - see WS2812B_MAX_STRIPS
+  }
+
   // Determine bytes per pixel
   strip->bytesPerPixel = (pixelType & 0x10) ? 4 : 3;
 
-  // Check buffer size
   uint16_t bufferSize = numPixels * strip->bytesPerPixel;
+  uint8_t slot = _numStripsConfigured;
+
   if (buffer)
   {
     strip->pixels = buffer;
   }
   else
   {
-    if (bufferSize > sizeof(_pixelBuffer))
+    if (bufferSize > sizeof(_pixelBuffers[slot]))
     {
       return false;
     }
-    strip->pixels = _pixelBuffer;
+    strip->pixels = _pixelBuffers[slot];
+  }
+
+  // Bind the pin to its own TCC0 compare channel before committing this
+  // strip to a slot, so an unsupported pin fails without burning one.
+  uint8_t woChannel;
+  if (!_configureTCC0(pin, &woChannel))
+  {
+    return false;
   }
 
   strip->pin = pin;
@@ -387,21 +442,17 @@ bool ws2812b_init(ws2812b_strip_t *strip, uint8_t pin, uint16_t numPixels,
   strip->pixelType = pixelType;
   strip->brightness = 255;
   strip->state = WS2812B_STATE_IDLE;
+  strip->_slot = slot;
+  strip->_woChannel = woChannel;
+  strip->_busyStartMs = 0;
 
   // Clear pixel buffer
   memset(strip->pixels, 0, bufferSize);
 
-  // Configure TCC0 for this pin (only once, or if pin changes)
-  if (!_tccConfigured || _configuredPin != pin)
-  {
-    if (!_configureTCC0(pin))
-    {
-      return false;
-    }
-  }
+  // Configure this strip's own DMA channel
+  _configureDMAChannel(slot);
 
-  // Configure DMA controller
-  _configureDMA();
+  _numStripsConfigured++;
 
   return true;
 }
@@ -563,16 +614,16 @@ bool ws2812b_show(ws2812b_strip_t *strip)
     return false;
   }
 
-  // Check if previous transfer is still in progress
+  // Check if this strip's previous transfer is still in progress
   if (strip->state == WS2812B_STATE_BUSY && !_checkTransferComplete(strip))
   {
     return false; // Still busy
   }
 
-  // Encode pixel data to DMA buffer
+  // Encode pixel data to this strip's own DMA buffer
   uint16_t dmaLength = _encodePixels(strip);
 
-  // Mark as busy and start transfer
+  // Mark as busy and start transfer on this strip's own channel
   strip->state = WS2812B_STATE_BUSY;
   _startDMATransfer(strip, dmaLength);
 
@@ -615,20 +666,22 @@ void ws2812b_wait(ws2812b_strip_t *strip)
 #ifdef WS2812B_USE_INTERRUPT
 void DMAC_Handler(void)
 {
-  // Check if it's our channel
-  if (DMAC->INTPEND.bit.ID == WS2812B_DMA_CHANNEL)
+  uint8_t channel = DMAC->INTPEND.bit.ID;
+  if (channel >= WS2812B_MAX_STRIPS)
   {
-    DMAC->CHID.reg = WS2812B_DMA_CHANNEL;
+    return;
+  }
 
-    if (DMAC->CHINTFLAG.bit.TCMPL)
+  DMAC->CHID.reg = channel;
+
+  if (DMAC->CHINTFLAG.bit.TCMPL)
+  {
+    DMAC->CHINTFLAG.reg = DMAC_CHINTFLAG_TCMPL;
+    DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
+
+    if (_activeStrips[channel])
     {
-      DMAC->CHINTFLAG.reg = DMAC_CHINTFLAG_TCMPL;
-      DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
-
-      if (_activeStrip)
-      {
-        _activeStrip->state = WS2812B_STATE_IDLE;
-      }
+      _activeStrips[channel]->state = WS2812B_STATE_IDLE;
     }
   }
 }

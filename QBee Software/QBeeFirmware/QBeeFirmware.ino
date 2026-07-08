@@ -4,6 +4,7 @@
 #include "ws2812b_dma_driver.h"
 
 ws2812b_strip_t strip;
+ws2812b_strip_t strip2;
 
 #define PIXEL_PIN_1 15
 #define PIXEL_PIN_2 14
@@ -20,7 +21,7 @@ int ledState = 0;  // ledState used to set the LED
 
 unsigned long previousMillis = 0;  // will store last time LED was updated
 
-const long interval = 50;  // interval at which to blink (milliseconds)
+const long interval = 500;  // interval at which to blink (milliseconds)
 
 // neopixel_strip_t strip;
 // neopixel_strip_t strip2;
@@ -38,23 +39,16 @@ void setup() {
   pinMode(ledPin3, OUTPUT);
 
   ws2812b_init(&strip, PIXEL_PIN_1, 8, WS2812B_GRB, NULL);
+  ws2812b_init(&strip2, PIXEL_PIN_2, 8, WS2812B_GRB, NULL);
   ws2812b_set_brightness(&strip, 64);
-  // ws2812b_set_pixel_color(&strip, 0, ws2812b_color(255, 0, 0));
-  // ws2812b_set_pixel_color(&strip, 1, ws2812b_color(255, 127, 0));
-  // ws2812b_set_pixel_color(&strip, 2, ws2812b_color(127, 255, 0));
-  // ws2812b_set_pixel_color(&strip, 3, ws2812b_color(0, 255, 0));
-  // ws2812b_set_pixel_color(&strip, 4, ws2812b_color(0, 255, 127));
-  // ws2812b_set_pixel_color(&strip, 5, ws2812b_color(0, 127, 255));
-  // ws2812b_set_pixel_color(&strip, 6, ws2812b_color(0, 0, 255));
-  // ws2812b_set_pixel_color(&strip, 7, ws2812b_color(127, 0, 255));
-  // ws2812b_set_pixel_color(&strip, 0, ws2812b_color(255, 0, 127));
-  ws2812b_fill(&strip, 0, 0, 0);
-  ws2812b_show(&strip);  // Fire and forget - returns immediately
 
-  // analogWrite(ledPin2, 200);
-  // analogWrite(ledPin3, 100);
+  ws2812b_fill(&strip, 0, 0, 0);
+  ws2812b_fill(&strip2, 0, 0, 0);
+  ws2812b_show(&strip);
+  ws2812b_show(&strip2);
 }
 uint8_t ledNr = 0;
+uint32_t colour =ws2812b_color(255, 255,255);
 void loop() {
 
   // check to see if it's time to blink the LED; that is, if the difference
@@ -69,12 +63,12 @@ void loop() {
     Serial.print("ledNr: ");
     Serial.println(ledNr);
     // if the LED is off turn it on and vice-versa:
+    ws2812b_set_pixel_color(&strip, ledNr, colour);
     if (ledState == 64) {
       ledState = 200;
-      ws2812b_set_pixel_color(&strip, ledNr, ws2812b_color(255, 255, 255));
 
     } else {
-      ws2812b_set_pixel_color(&strip, ledNr, ws2812b_color(0, 0, 255));
+      
 
 
       ledState = 64;
@@ -92,7 +86,14 @@ void loop() {
     ledNr += 1;
     if (ledNr >= 8) {
       ledNr = 0;
-      ws2812b_fill(&strip, 0,0,0);
+      Serial.print("colour");
+      Serial.println(colour);
+      if (colour == 0) {
+      colour = ws2812b_color(255, 0,0);
+      }else {
+      colour = ws2812b_color(0, 0,0);
+      
+      }
     }
     // neopixel_show(&strip);
     // strip1.show();

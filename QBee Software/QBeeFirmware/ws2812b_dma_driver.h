@@ -30,6 +30,13 @@ extern "C" {
 #define WS2812B_MAX_PIXELS 16
 #endif
 
+// Maximum number of concurrent, independent strips. Each strip gets its
+// own DMA channel/descriptor/buffer and its own TCC0 WO[x] compare
+// channel; on this board that means PA14 and PA15 (TCC0 WO[0]/WO[1]).
+#ifndef WS2812B_MAX_STRIPS
+#define WS2812B_MAX_STRIPS 2
+#endif
+
 // TCC PWM timing constants @ 48MHz
 #define WS2812B_PERIOD_TICKS    60   // 1.25µs = 800 kHz
 #define WS2812B_T0H_TICKS       14   // ~290ns for '0' bit high
@@ -67,6 +74,11 @@ typedef struct {
     uint8_t brightness;        // Global brightness (0-255)
     uint8_t *pixels;           // Pixel color buffer (RGB/RGBW data)
     volatile ws2812b_state_t state;  // Current transfer state
+
+    // --- driver-private: set by ws2812b_init(), do not modify ---
+    uint8_t _slot;              // This strip's DMA channel / buffer index
+    uint8_t _woChannel;         // TCC0 WO[x]/CC[x] channel driving its pin
+    uint32_t _busyStartMs;      // millis() when its current transfer started
 } ws2812b_strip_t;
 
 /**
@@ -86,7 +98,8 @@ typedef struct {
  * @param numPixels Number of pixels in strip
  * @param pixelType Pixel type flags (e.g., WS2812B_GRB)
  * @param buffer External pixel buffer (NULL to use internal buffer)
- * @return true if initialization successful
+ * @return true if initialization successful, false if the pin is not
+ *         TCC0-capable or WS2812B_MAX_STRIPS strips are already in use
  */
 bool ws2812b_init(ws2812b_strip_t *strip, uint8_t pin, uint16_t numPixels,
                   uint8_t pixelType, uint8_t *buffer);
