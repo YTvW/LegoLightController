@@ -1,38 +1,63 @@
 /**
  * @file pwm_driver.c
- * @brief TC-based PWM driver implementation for SAMD11C
+ * @brief TC-based PWM driver implementation for SAMD11C / SAMD21
  *
- * Uses TC1 and TC2 in 8-bit PWM mode, leaving TCC0 free for the
- * WS2812B DMA driver.
+ * Uses two TC instances in 8-bit PWM mode, leaving TCC0 free for the
+ * WS2812B DMA driver:
+ *   - SAMD11C: TC1 (channels 0-1) and TC2 (channels 2-3)
+ *   - SAMD21:  TC3 (channels 0-1) and TC4 (channels 2-3)
  */
 
 #include "pwm_driver.h"
 
-// SAMD11C14A TC Pin Mapping (PMUX Function E = 0x04)
-// PA04 -> TC1/WO[0] (channel 0)
-// PA05 -> TC1/WO[1] (channel 1)
-// PA14 -> TC1/WO[0] (channel 0, alt - normally used by WS2812B strip 2)
-// PA15 -> TC1/WO[1] (channel 1, alt - normally used by WS2812B strip 1)
-// PA30 -> TC2/WO[0] (channel 2, WARNING: SWCLK programming pin)
-// PA31 -> TC2/WO[1] (channel 3, WARNING: SWDIO programming pin)
-//
-// Note: PA08/PA09 have no TC waveform outputs on the SAMD11, only TCC0.
+// The two TC instances backing the four PWM channels, and their GCLK
+// channel IDs. On the SAMD11 TC1/TC2 share one GCLK channel; on the
+// SAMD21 TC3 (paired with TCC2) and TC4 (paired with TC5) each sit on
+// their own.
+#if defined(_SAMD21_)
+#define PWM_TC_A TC3
+#define PWM_TC_B TC4
+#define PWM_TC_A_GCLK_ID TC3_GCLK_ID
+#define PWM_TC_B_GCLK_ID TC4_GCLK_ID
+#define PWM_APBCMASK (PM_APBCMASK_TC3 | PM_APBCMASK_TC4)
+#else // _SAMD11_
+#define PWM_TC_A TC1
+#define PWM_TC_B TC2
+#define PWM_TC_A_GCLK_ID TC1_GCLK_ID
+#define PWM_TC_B_GCLK_ID TC1_GCLK_ID // TC1 and TC2 share one GCLK channel
+#define PWM_APBCMASK (PM_APBCMASK_TC1 | PM_APBCMASK_TC2)
+#endif
 
-// Pin mapping table - maps Arduino pins to TC waveform outputs
-// This may need adjustment based on your specific board variant
+// Pin mapping table - maps port pins to TC waveform outputs.
+// Pins are matched through g_APinDescription, so Arduino pin numbers
+// resolve correctly on any board variant.
 static const struct
 {
-  uint8_t arduinoPin;
-  uint8_t portPin; // PA pin number
-  uint8_t channel; // PWM channel (0-1 = TC1 CC0/CC1, 2-3 = TC2 CC0/CC1)
+  uint8_t port;    // 0 = PORTA, 1 = PORTB
+  uint8_t portPin; // pin number within the port
+  uint8_t channel; // PWM channel (0-1 = TC A CC0/CC1, 2-3 = TC B CC0/CC1)
   uint8_t mux;     // PMUX function
 } pinMap[] = {
-    {4, 4, 0, PORT_PMUX_PMUXE_E_Val},   // Arduino pin 4 = PA04 -> TC1/WO[0]
-    {5, 5, 1, PORT_PMUX_PMUXE_E_Val},   // Arduino pin 5 = PA05 -> TC1/WO[1]
-    {14, 14, 0, PORT_PMUX_PMUXE_E_Val}, // Arduino pin 14 = PA14 -> TC1/WO[0] (alt)
-    {15, 15, 1, PORT_PMUX_PMUXE_E_Val}, // Arduino pin 15 = PA15 -> TC1/WO[1] (alt)
-    {30, 30, 2, PORT_PMUX_PMUXE_E_Val}, // Arduino pin 30 = PA30 -> TC2/WO[0] (SWCLK!)
-    {31, 31, 3, PORT_PMUX_PMUXE_E_Val}, // Arduino pin 31 = PA31 -> TC2/WO[1] (SWDIO!)
+#if defined(_SAMD21_)
+    // SAMD21 TC Pin Mapping (PMUX Function E = 0x04)
+    {0, 14, 0, PORT_PMUX_PMUXE_E_Val}, // PA14 -> TC3/WO[0]
+    {0, 15, 1, PORT_PMUX_PMUXE_E_Val}, // PA15 -> TC3/WO[1]
+    {0, 18, 0, PORT_PMUX_PMUXE_E_Val}, // PA18 -> TC3/WO[0] (alt)
+    {0, 19, 1, PORT_PMUX_PMUXE_E_Val}, // PA19 -> TC3/WO[1] (alt)
+    {0, 22, 2, PORT_PMUX_PMUXE_E_Val}, // PA22 -> TC4/WO[0]
+    {0, 23, 3, PORT_PMUX_PMUXE_E_Val}, // PA23 -> TC4/WO[1]
+    {1, 8, 2, PORT_PMUX_PMUXE_E_Val},  // PB08 -> TC4/WO[0] (alt, G/J parts)
+    {1, 9, 3, PORT_PMUX_PMUXE_E_Val},  // PB09 -> TC4/WO[1] (alt, G/J parts)
+#else
+    // SAMD11C14A TC Pin Mapping (PMUX Function E = 0x04)
+    // Note: PA08/PA09 have no TC waveform outputs on the SAMD11, only TCC0.
+    {0, 4, 0, PORT_PMUX_PMUXE_E_Val},  // PA04 -> TC1/WO[0]
+    {0, 5, 1, PORT_PMUX_PMUXE_E_Val},  // PA05 -> TC1/WO[1]
+    {0, 14, 0, PORT_PMUX_PMUXE_E_Val}, // PA14 -> TC1/WO[0] (alt - normally WS2812B strip 2)
+    {0, 15, 1, PORT_PMUX_PMUXE_E_Val}, // PA15 -> TC1/WO[1] (alt - normally WS2812B strip 1)
+    {0, 30, 2, PORT_PMUX_PMUXE_E_Val}, // PA30 -> TC2/WO[0] (WARNING: SWCLK programming pin)
+    {0, 31, 3, PORT_PMUX_PMUXE_E_Val}, // PA31 -> TC2/WO[1] (WARNING: SWDIO programming pin)
+#endif
 };
 #define PIN_MAP_SIZE (sizeof(pinMap) / sizeof(pinMap[0]))
 
@@ -44,11 +69,11 @@ static uint32_t currentPeriod = 0;
 static uint8_t currentPrescaler = TC_CTRLA_PRESCALER_DIV1_Val;
 
 /**
- * @brief Get the TC instance serving a channel (0-1 = TC1, 2-3 = TC2)
+ * @brief Get the TC instance serving a channel (0-1 = TC A, 2-3 = TC B)
  */
 static inline Tc *tcForChannel(uint8_t channel)
 {
-  return (channel < 2) ? TC1 : TC2;
+  return (channel < 2) ? PWM_TC_A : PWM_TC_B;
 }
 
 /**
@@ -61,12 +86,19 @@ static inline uint8_t ccIndexForChannel(uint8_t channel)
 
 /**
  * @brief Find pin configuration in the mapping table
+ *
+ * Resolves the Arduino pin to its port/pin through g_APinDescription
+ * (GetPort/GetPin work with every variant pin-table layout), then matches
+ * against the port pin map.
  */
 static int findPinConfig(uint8_t pin)
 {
+  uint8_t portPin = GetPin(pin);
+  uint8_t portNum = GetPort(pin);
+
   for (size_t i = 0; i < PIN_MAP_SIZE; i++)
   {
-    if (pinMap[i].arduinoPin == pin)
+    if (pinMap[i].port == portNum && pinMap[i].portPin == portPin)
     {
       return (int)i;
     }
@@ -77,29 +109,21 @@ static int findPinConfig(uint8_t pin)
 /**
  * @brief Configure port pin for TC output
  */
-static void configurePinMux(uint8_t portPin, uint8_t mux)
+static void configurePinMux(uint8_t port, uint8_t portPin, uint8_t mux)
 {
   // Enable pin multiplexing
   if (portPin & 1)
   {
     // Odd pin - use PMUXO
-    PORT->Group[0].PMUX[portPin >> 1].bit.PMUXO = mux;
+    PORT->Group[port].PMUX[portPin >> 1].bit.PMUXO = mux;
   }
   else
   {
     // Even pin - use PMUXE
-    PORT->Group[0].PMUX[portPin >> 1].bit.PMUXE = mux;
+    PORT->Group[port].PMUX[portPin >> 1].bit.PMUXE = mux;
   }
   // Enable peripheral multiplexer for this pin
-  PORT->Group[0].PINCFG[portPin].bit.PMUXEN = 1;
-}
-
-/**
- * @brief Disable peripheral mux for a pin (return to GPIO)
- */
-static void disablePinMux(uint8_t portPin)
-{
-  PORT->Group[0].PINCFG[portPin].bit.PMUXEN = 0;
+  PORT->Group[port].PINCFG[portPin].bit.PMUXEN = 1;
 }
 
 /**
@@ -206,16 +230,22 @@ bool pwm_init(uint32_t frequencyHz)
     return true;
   }
 
-  // TC1 and TC2 share one generic clock channel on the SAMD11.
-  // Use GCLK0 (typically 48MHz from DFLL).
-  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(TC1_GCLK_ID) |
+  // Feed both TC GCLK channels from GCLK0 (typically 48MHz from DFLL).
+  // On the SAMD11 both TCs share one channel, so the second write just
+  // repeats the first; on the SAMD21 TC3 and TC4 have separate channels.
+  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(PWM_TC_A_GCLK_ID) |
+                      GCLK_CLKCTRL_GEN_GCLK0 |
+                      GCLK_CLKCTRL_CLKEN;
+  while (GCLK->STATUS.bit.SYNCBUSY)
+    ;
+  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(PWM_TC_B_GCLK_ID) |
                       GCLK_CLKCTRL_GEN_GCLK0 |
                       GCLK_CLKCTRL_CLKEN;
   while (GCLK->STATUS.bit.SYNCBUSY)
     ;
 
-  // Enable TC1 and TC2 in Power Manager
-  PM->APBCMASK.reg |= PM_APBCMASK_TC1 | PM_APBCMASK_TC2;
+  // Enable both TCs in Power Manager
+  PM->APBCMASK.reg |= PWM_APBCMASK;
 
   uint8_t prescaler;
   uint32_t period;
@@ -224,8 +254,8 @@ bool pwm_init(uint32_t frequencyHz)
   currentPrescaler = prescaler;
   currentPeriod = period;
 
-  configureTC(TC1, prescaler, period);
-  configureTC(TC2, prescaler, period);
+  configureTC(PWM_TC_A, prescaler, period);
+  configureTC(PWM_TC_B, prescaler, period);
 
   pwmInitialized = true;
 
@@ -252,7 +282,7 @@ bool pwm_configure_channel(uint8_t channel, uint8_t pin)
   }
 
   // Configure pin for TC output
-  configurePinMux(pinMap[pinIdx].portPin, pinMap[pinIdx].mux);
+  configurePinMux(pinMap[pinIdx].port, pinMap[pinIdx].portPin, pinMap[pinIdx].mux);
 
   return true;
 }
@@ -343,8 +373,8 @@ void pwm_set_frequency(uint32_t frequencyHz)
   currentPeriod = period;
 
   // Prescaler is enable-protected, so both TCs get a full reconfigure
-  configureTC(TC1, prescaler, period);
-  configureTC(TC2, prescaler, period);
+  configureTC(PWM_TC_A, prescaler, period);
+  configureTC(PWM_TC_B, prescaler, period);
 
   // Restore duty cycles on enabled channels
   for (int i = 0; i < PWM_NUM_CHANNELS; i++)
@@ -364,7 +394,7 @@ void pwm_deinit(void)
   }
 
   // Disable and reset both TCs
-  Tc *tcs[] = {TC1, TC2};
+  Tc *tcs[] = {PWM_TC_A, PWM_TC_B};
   for (int i = 0; i < 2; i++)
   {
     tcs[i]->COUNT8.CTRLA.reg &= ~TC_CTRLA_ENABLE;
@@ -375,13 +405,18 @@ void pwm_deinit(void)
       ;
   }
 
-  // Disable the shared TC1/TC2 clock
-  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(TC1_GCLK_ID);
+  // Disable both TC clock channels. Note the sharing: TC1/TC2 share one
+  // channel on the SAMD11; on the SAMD21 this also stops TCC2 (paired
+  // with TC3) and TC5 (paired with TC4), e.g. analogWrite on their pins.
+  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(PWM_TC_A_GCLK_ID);
+  while (GCLK->STATUS.bit.SYNCBUSY)
+    ;
+  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(PWM_TC_B_GCLK_ID);
   while (GCLK->STATUS.bit.SYNCBUSY)
     ;
 
   // Disable in Power Manager
-  PM->APBCMASK.reg &= ~(PM_APBCMASK_TC1 | PM_APBCMASK_TC2);
+  PM->APBCMASK.reg &= ~PWM_APBCMASK;
 
   // Reset state
   for (int i = 0; i < PWM_NUM_CHANNELS; i++)

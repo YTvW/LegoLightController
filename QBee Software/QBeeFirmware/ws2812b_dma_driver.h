@@ -1,14 +1,20 @@
 /**
  * @file ws2812b_dma_driver.h
- * @brief WS2812B driver using TCC0+DMA for SAMD11C
+ * @brief WS2812B driver using TCC0+DMA for SAMD11C / SAMD21
  *
  * Uses TCC0 in PWM mode with DMA for background LED updates.
  * Zero CPU utilization during data transmission. DMA writes go to the
  * double-buffered CCB register (latched at each period boundary), which
- * TC1 lacks - so TCC0 is required for glitch-free bit timing.
+ * the plain TC peripherals lack - so TCC0 is required for glitch-free
+ * bit timing.
  *
- * NOTE: claims TCC0, so it cannot be combined with pwm_driver or with
- * analogWrite() on TCC0 pins.
+ * Supported chips (selected automatically at compile time):
+ *   - SAMD11C: TCC0 WO[0]/WO[1] pins, up to 2 strips
+ *   - SAMD21:  TCC0 CC0..CC3 pins, up to 4 strips (set WS2812B_MAX_STRIPS)
+ *
+ * NOTE: claims TCC0, so it cannot be combined with analogWrite() on TCC0
+ * pins. pwm_driver is safe to combine: it uses TC1/TC2 (SAMD11) or
+ * TC3/TC4 (SAMD21).
  *
  * Timing: 800 kHz (1.25µs period = 60 ticks @ 48MHz)
  *   - '0' bit: ~290ns high (14 ticks), ~940ns low
@@ -31,8 +37,10 @@ extern "C" {
 #endif
 
 // Maximum number of concurrent, independent strips. Each strip gets its
-// own DMA channel/descriptor/buffer and its own TCC0 WO[x] compare
-// channel; on this board that means PA14 and PA15 (TCC0 WO[0]/WO[1]).
+// own DMA channel/descriptor/buffer and its own TCC0 CC[x] compare
+// channel. On the SAMD11C (QBee board) that means PA14 and PA15
+// (TCC0 WO[0]/WO[1]), max 2. On the SAMD21 TCC0 has 4 compare channels,
+// so this can be raised to 4 if each strip's pin uses a distinct CC.
 #ifndef WS2812B_MAX_STRIPS
 #define WS2812B_MAX_STRIPS 2
 #endif
@@ -77,7 +85,7 @@ typedef struct {
 
     // --- driver-private: set by ws2812b_init(), do not modify ---
     uint8_t _slot;              // This strip's DMA channel / buffer index
-    uint8_t _woChannel;         // TCC0 WO[x]/CC[x] channel driving its pin
+    uint8_t _woChannel;         // TCC0 CC[x]/CCB[x] channel driving its pin
     uint32_t _busyStartMs;      // millis() when its current transfer started
 } ws2812b_strip_t;
 
@@ -92,6 +100,13 @@ typedef struct {
  *   - PA05: TCC0/WO[1] mux E
  *   - PA14: TCC0/WO[0] mux F
  *   - PA15: TCC0/WO[1] mux F
+ *
+ * SAMD21 valid pins for TCC0 (CC channel in parentheses; concurrent
+ * strips must each use a distinct CC channel):
+ *   - CC0: PA04/PA08 (mux E), PA14/PA22, PB10 (mux F), PB30 (mux E)
+ *   - CC1: PA05/PA09 (mux E), PA15/PA23, PB11 (mux F), PB31 (mux E)
+ *   - CC2: PA10/PA12/PA16/PA18/PA20 (mux F)
+ *   - CC3: PA11/PA13/PA17/PA19/PA21 (mux F)
  *
  * @param strip Pointer to strip structure
  * @param pin Arduino pin number (must support TCC0 output)

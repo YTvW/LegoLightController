@@ -1,6 +1,6 @@
 /**
  * @file ws2812b_dma_driver.c
- * @brief WS2812B driver using TCC0+DMA for SAMD11C
+ * @brief WS2812B driver using TCC0+DMA for SAMD11C / SAMD21
  *
  * Uses TCC0 in PWM mode with DMA controller for background LED updates.
  * The DMA feeds compare values into TCC0's double-buffered CCB[x] register,
@@ -69,25 +69,61 @@ static void _configureDMAChannel(uint8_t channel);
 static uint16_t _encodePixels(ws2812b_strip_t *strip);
 
 // ============================================================================
-// Pin Mapping for TCC0 on SAMD11C
+// Pin Mapping for TCC0 (per-chip: SAMD11C or SAMD21)
 // ============================================================================
 
 typedef struct
 {
-  uint8_t arduinoPin;
+  uint8_t port;      // 0 = PORTA, 1 = PORTB
   uint8_t portPin;   // PA0 = 0, PA1 = 1, etc.
-  uint8_t woChannel; // WO[x] -> CC[x]/CCB[x]
+  uint8_t ccChannel; // TCC0 CC[x]/CCB[x] compare channel driving the pin
   uint8_t pmuxVal;   // PMUX function (E or F)
 } tcc0_pin_map_t;
+
+#if defined(_SAMD21_)
+
+// TCC0 capable pins on SAMD21. TCC0 has 4 compare channels (CC0-CC3) and
+// 8 waveform outputs; with the default output matrix WO[4+n] mirrors CC[n],
+// so pins on WO[4..7] map back to CC[0..3]. Up to 4 concurrent strips are
+// possible if each pin uses a distinct CC channel.
+// Note: Actual Arduino pin numbers depend on board variant
+static const tcc0_pin_map_t _tcc0Pins[] = {
+    {0, 4, 0, PORT_PMUX_PMUXE_E_Val},   // PA04 -> TCC0/WO[0] (mux E) -> CC0
+    {0, 5, 1, PORT_PMUX_PMUXE_E_Val},   // PA05 -> TCC0/WO[1] (mux E) -> CC1
+    {0, 8, 0, PORT_PMUX_PMUXE_E_Val},   // PA08 -> TCC0/WO[0] (mux E) -> CC0
+    {0, 9, 1, PORT_PMUX_PMUXE_E_Val},   // PA09 -> TCC0/WO[1] (mux E) -> CC1
+    {0, 10, 2, PORT_PMUX_PMUXE_F_Val},  // PA10 -> TCC0/WO[2] (mux F) -> CC2
+    {0, 11, 3, PORT_PMUX_PMUXE_F_Val},  // PA11 -> TCC0/WO[3] (mux F) -> CC3
+    {0, 12, 2, PORT_PMUX_PMUXE_F_Val},  // PA12 -> TCC0/WO[6] (mux F) -> CC2
+    {0, 13, 3, PORT_PMUX_PMUXE_F_Val},  // PA13 -> TCC0/WO[7] (mux F) -> CC3
+    {0, 14, 0, PORT_PMUX_PMUXE_F_Val},  // PA14 -> TCC0/WO[4] (mux F) -> CC0
+    {0, 15, 1, PORT_PMUX_PMUXE_F_Val},  // PA15 -> TCC0/WO[5] (mux F) -> CC1
+    {0, 16, 2, PORT_PMUX_PMUXE_F_Val},  // PA16 -> TCC0/WO[6] (mux F) -> CC2
+    {0, 17, 3, PORT_PMUX_PMUXE_F_Val},  // PA17 -> TCC0/WO[7] (mux F) -> CC3
+    {0, 18, 2, PORT_PMUX_PMUXE_F_Val},  // PA18 -> TCC0/WO[2] (mux F) -> CC2
+    {0, 19, 3, PORT_PMUX_PMUXE_F_Val},  // PA19 -> TCC0/WO[3] (mux F) -> CC3
+    {0, 20, 2, PORT_PMUX_PMUXE_F_Val},  // PA20 -> TCC0/WO[6] (mux F) -> CC2
+    {0, 21, 3, PORT_PMUX_PMUXE_F_Val},  // PA21 -> TCC0/WO[7] (mux F) -> CC3
+    {0, 22, 0, PORT_PMUX_PMUXE_F_Val},  // PA22 -> TCC0/WO[4] (mux F) -> CC0
+    {0, 23, 1, PORT_PMUX_PMUXE_F_Val},  // PA23 -> TCC0/WO[5] (mux F) -> CC1
+    {1, 10, 0, PORT_PMUX_PMUXE_F_Val},  // PB10 -> TCC0/WO[4] (mux F) -> CC0 (G/J parts)
+    {1, 11, 1, PORT_PMUX_PMUXE_F_Val},  // PB11 -> TCC0/WO[5] (mux F) -> CC1 (G/J parts)
+    {1, 30, 0, PORT_PMUX_PMUXE_E_Val},  // PB30 -> TCC0/WO[0] (mux E) -> CC0 (J parts)
+    {1, 31, 1, PORT_PMUX_PMUXE_E_Val},  // PB31 -> TCC0/WO[1] (mux E) -> CC1 (J parts)
+};
+
+#else // _SAMD11_
 
 // TCC0 capable pins on SAMD11C
 // Note: Actual Arduino pin numbers depend on board variant
 static const tcc0_pin_map_t _tcc0Pins[] = {
-    {4, 4, 0, PORT_PMUX_PMUXE_E_Val},   // PA04 -> TCC0/WO[0] (mux E)
-    {5, 5, 1, PORT_PMUX_PMUXE_E_Val},   // PA05 -> TCC0/WO[1] (mux E)
-    {14, 14, 0, PORT_PMUX_PMUXE_F_Val}, // PA14 -> TCC0/WO[0] (mux F)
-    {15, 15, 1, PORT_PMUX_PMUXE_F_Val}, // PA15 -> TCC0/WO[1] (mux F)
+    {0, 4, 0, PORT_PMUX_PMUXE_E_Val},  // PA04 -> TCC0/WO[0] (mux E) -> CC0
+    {0, 5, 1, PORT_PMUX_PMUXE_E_Val},  // PA05 -> TCC0/WO[1] (mux E) -> CC1
+    {0, 14, 0, PORT_PMUX_PMUXE_F_Val}, // PA14 -> TCC0/WO[0] (mux F) -> CC0
+    {0, 15, 1, PORT_PMUX_PMUXE_F_Val}, // PA15 -> TCC0/WO[1] (mux F) -> CC1
 };
+
+#endif
 
 #define TCC0_PIN_MAP_SIZE (sizeof(_tcc0Pins) / sizeof(_tcc0Pins[0]))
 
@@ -114,20 +150,15 @@ static bool _configureTCC0(uint8_t arduinoPin, uint8_t *woChannelOut)
   // Find the pin in our mapping
   const tcc0_pin_map_t *pinMap = NULL;
 
-  // Map Arduino pin to port pin
-  uint8_t portPin = g_APinDescription[arduinoPin].ulPin;
-  uint8_t portNum = g_APinDescription[arduinoPin].ulPort;
-
-  // SAMD11C only has PORTA
-  if (portNum != 0)
-  {
-    return false;
-  }
+  // Map Arduino pin to port + port pin (GetPort/GetPin work with every
+  // variant pin-table layout, unlike raw ulPort/ulPin field access)
+  uint8_t portPin = GetPin(arduinoPin);
+  uint8_t portNum = GetPort(arduinoPin);
 
   // Find matching TCC0 pin configuration
   for (uint8_t i = 0; i < TCC0_PIN_MAP_SIZE; i++)
   {
-    if (_tcc0Pins[i].portPin == portPin)
+    if (_tcc0Pins[i].port == portNum && _tcc0Pins[i].portPin == portPin)
     {
       pinMap = &_tcc0Pins[i];
       break;
@@ -181,27 +212,27 @@ static bool _configureTCC0(uint8_t arduinoPin, uint8_t *woChannelOut)
   // low). Safe to do on an already-running TCC0 - same mechanism
   // pwm_driver uses for live duty updates. DMA only ever writes the low
   // byte of CCB[x]; the upper bytes stay zero from this init.
-  TCC0->CC[pinMap->woChannel].reg = 0;
+  TCC0->CC[pinMap->ccChannel].reg = 0;
   while (TCC0->SYNCBUSY.reg)
     ;
-  TCC0->CCB[pinMap->woChannel].reg = 0;
+  TCC0->CCB[pinMap->ccChannel].reg = 0;
   while (TCC0->SYNCBUSY.reg)
     ;
 
   // Configure pin for TCC0 output
-  PORT->Group[0].PINCFG[portPin].reg = PORT_PINCFG_PMUXEN;
+  PORT->Group[portNum].PINCFG[portPin].reg = PORT_PINCFG_PMUXEN;
   if (portPin & 1)
   {
     // Odd pin: use upper nibble
-    PORT->Group[0].PMUX[portPin >> 1].bit.PMUXO = pinMap->pmuxVal;
+    PORT->Group[portNum].PMUX[portPin >> 1].bit.PMUXO = pinMap->pmuxVal;
   }
   else
   {
     // Even pin: use lower nibble
-    PORT->Group[0].PMUX[portPin >> 1].bit.PMUXE = pinMap->pmuxVal;
+    PORT->Group[portNum].PMUX[portPin >> 1].bit.PMUXE = pinMap->pmuxVal;
   }
 
-  *woChannelOut = pinMap->woChannel;
+  *woChannelOut = pinMap->ccChannel;
   return true;
 }
 

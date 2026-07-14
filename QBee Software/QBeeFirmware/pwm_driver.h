@@ -1,18 +1,28 @@
 /**
  * @file pwm_driver.h
- * @brief TC-based PWM driver for SAMD11C
+ * @brief TC-based PWM driver for SAMD11C / SAMD21
  *
- * Uses the TC1 and TC2 hardware peripherals for efficient PWM generation,
- * leaving TCC0 free for the WS2812B DMA driver.
+ * Uses two TC hardware peripherals for efficient PWM generation,
+ * leaving TCC0 free for the WS2812B DMA driver. The chip is selected
+ * automatically at compile time.
  *
- * Channel to pin mapping on the SAMD11C14A:
- *   - Channel 0: pin 4 (PA04, TC1/WO[0]) or pin 14 (PA14)
- *   - Channel 1: pin 5 (PA05, TC1/WO[1]) or pin 15 (PA15)
- *   - Channel 2: pin 30 (PA30, TC2/WO[0]) - SWCLK programming pin!
- *   - Channel 3: pin 31 (PA31, TC2/WO[1]) - SWDIO programming pin!
+ * Channel to pin mapping on the SAMD11C14A (TC1/TC2):
+ *   - Channel 0: PA04 (TC1/WO[0]) or PA14
+ *   - Channel 1: PA05 (TC1/WO[1]) or PA15
+ *   - Channel 2: PA30 (TC2/WO[0]) - SWCLK programming pin!
+ *   - Channel 3: PA31 (TC2/WO[1]) - SWDIO programming pin!
  *
- * Pins 14/15 are normally taken by the WS2812B strips, and channels 2/3
- * sacrifice the SWD debug port, so pins 4 and 5 are the practical choices.
+ * PA14/PA15 are normally taken by the WS2812B strips, and channels 2/3
+ * sacrifice the SWD debug port, so PA04 and PA05 are the practical choices.
+ *
+ * Channel to pin mapping on the SAMD21 (TC3/TC4):
+ *   - Channel 0: PA14 (TC3/WO[0]) or PA18
+ *   - Channel 1: PA15 (TC3/WO[1]) or PA19
+ *   - Channel 2: PA22 (TC4/WO[0]) or PB08 (G/J parts)
+ *   - Channel 3: PA23 (TC4/WO[1]) or PB09 (G/J parts)
+ *
+ * Note: pwm_deinit() on the SAMD21 also gates the GCLK channels shared
+ * with TCC2 and TC5 (which analogWrite may be using on their pins).
  *
  * TC counters run in 8-bit mode, so the PWM frequency range is
  * ~184Hz to ~188kHz (out-of-range requests are clamped).
