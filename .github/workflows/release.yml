@@ -1,0 +1,77 @@
+name: Firmware Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  SKETCH: QBee Software/QBeeFirmware
+  CORE_INDEX_URL: https://raw.githubusercontent.com/qbolsee/ArduinoCore-fab-sam/master/json/package_Fab_SAM_index.json
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install Fab SAM core
+        run: |
+          arduino-cli core update-index --additional-urls "$CORE_INDEX_URL"
+          arduino-cli core install Fab_SAM_Arduino:samd@1.12.0 --additional-urls "$CORE_INDEX_URL"
+
+      - name: Compile for SAMD11C14A (QBee board)
+        run: |
+          arduino-cli compile \
+            --fqbn Fab_SAM_Arduino:samd:d11c14a \
+            --export-binaries \
+            "$SKETCH"
+
+      - name: Compile for SAMD21E
+        run: |
+          arduino-cli compile \
+            --fqbn Fab_SAM_Arduino:samd:x21e \
+            --export-binaries \
+            "$SKETCH"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p release
+          cp "$SKETCH/build/Fab_SAM_Arduino.samd.d11c14a/QBeeFirmware.ino.bin" release/QBeeFirmware-d11c14a.bin
+          cp "$SKETCH/build/Fab_SAM_Arduino.samd.d11c14a/QBeeFirmware.ino.elf" release/QBeeFirmware-d11c14a.elf
+          cp "$SKETCH/build/Fab_SAM_Arduino.samd.x21e/QBeeFirmware.ino.bin" release/QBeeFirmware-x21e.bin
+          cp "$SKETCH/build/Fab_SAM_Arduino.samd.x21e/QBeeFirmware.ino.elf" release/QBeeFirmware-x21e.elf
+
+      - name: Determine version from commits
+        id: version
+        if: github.ref == 'refs/heads/master'
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+
+      - name: Create release
+        if: github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.new_tag }}
+          name: Firmware ${{ steps.version.outputs.new_tag }}
+          body: |
+            Automated firmware build from ${{ github.sha }}
+
+            | File | Target |
+            | --- | --- |
+            | QBeeFirmware-d11c14a.bin | SAMD11C14A (QBee board) |
+            | QBeeFirmware-x21e.bin | SAMD21E |
+
+            ${{ steps.version.outputs.changelog }}
+          files: release/*
