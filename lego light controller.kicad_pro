@@ -770,7 +770,7 @@
       {
         "filename": "lego light controller.kicad_sch",
         "name": "lego light controller",
-        "uuid": "00000000-0000-0000-0000-000000000000"
+        "uuid": "98f222a8-3f8d-4678-9dc7-d0db8bfd24c1"
       }
     ],
     "used_designators": "",
@@ -779,7 +779,7 @@
   "sheets": [
     [
       "98f222a8-3f8d-4678-9dc7-d0db8bfd24c1",
-      "Root"
+      "lego light controller"
     ]
   ],
   "text_variables": {},
