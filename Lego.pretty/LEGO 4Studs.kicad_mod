@@ -1,0 +1,94 @@
+(footprint "LEGO 4Studs"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0 -0.5 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "9df2fdae-025b-4d8c-81d4-7af076a34aa6")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.1)
+			)
+		)
+	)
+	(property "Value" "LEGO 4Studs"
+		(at 0 1 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "1ffc8ca5-c872-4bab-b187-231f0c876c5e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "a71d6086-cd3a-49cc-a893-9bdcc6c5a2c5")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "137adaa9-fe2a-4b24-a23b-4a1112dd2193")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_rect
+		(start -5 -8)
+		(end 26.8 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "cccff898-81d3-4421-a3a6-cdd6b4782cfe")
+	)
+	(pad "" np_thru_hole circle
+		(at -1.1 -4)
+		(size 5.1 5.1)
+		(drill 5)
+		(layers "*.Cu" "*.Mask")
+		(uuid "3bb0ee51-41e2-45ad-83ff-a507adc04b30")
+	)
+	(pad "" np_thru_hole circle
+		(at 6.9 -4)
+		(size 5.1 5.1)
+		(drill 5)
+		(layers "*.Cu" "*.Mask")
+		(uuid "3bfc24aa-bab7-4e28-8a62-c59f5646d437")
+	)
+	(pad "" np_thru_hole circle
+		(at 14.9 -4)
+		(size 5.1 5.1)
+		(drill 5)
+		(layers "*.Cu" "*.Mask")
+		(uuid "0e4c4700-d684-4c5d-a439-12286a163072")
+	)
+	(pad "" np_thru_hole circle
+		(at 22.9 -4)
+		(size 5.1 5.1)
+		(drill 5)
+		(layers "*.Cu" "*.Mask")
+		(uuid "50a57074-aded-40c3-a53b-ec6f13034ba3")
+	)
+	(embedded_fonts no)
+)
